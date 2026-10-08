@@ -9,6 +9,12 @@ import {
   has2048Tile,
   getHighestTileValue,
 } from './utils/gameLogic';
+import {
+  initializeStorage,
+  loadGame,
+  saveGame,
+  SavedGameState,
+} from './utils/storage';
 import { sound } from './utils/sound';
 
 import { Header } from './components/Header';
@@ -21,11 +27,12 @@ import { AchievementsModal } from './components/AchievementsModal';
 import { ConfirmModal } from './components/ConfirmModal';
 import { ConfettiCanvas } from './components/ConfettiCanvas';
 
-const BEST_SCORE_KEY = 'mergetiles_best_score_v1';
-const STATS_KEY = 'mergetiles_stats_v1';
 const SETTINGS_KEY = 'mergetiles_settings_v1';
 
 export default function App() {
+  // Loading State for Playgama Storage Initialization
+  const [isLoading, setIsLoading] = useState<boolean>(true);
+
   // Game State Engine Variables
   const [board, setBoard] = useState<number[][]>(() => [
     [0, 0, 0, 0],
@@ -74,50 +81,106 @@ export default function App() {
     showTouchPad: false,
   });
 
-  // Load saved data from localStorage on mount
+  // Helper to persist current game state via Playgama Storage SDK
+  const persistState = useCallback(
+    (overrides?: Partial<Omit<SavedGameState, 'updatedAt'>>) => {
+      const fullState: Omit<SavedGameState, 'updatedAt'> = {
+        board: overrides?.board ?? board,
+        score: overrides?.score ?? score,
+        bestScore: overrides?.bestScore ?? bestScore,
+        gameWon: overrides?.gameWon ?? gameWon,
+        gameOver: overrides?.gameOver ?? gameOver,
+        hasContinued: overrides?.hasContinued ?? hasContinued,
+        previousBoard: overrides?.previousBoard !== undefined ? overrides.previousBoard : previousBoard,
+        previousScore: overrides?.previousScore !== undefined ? overrides.previousScore : previousScore,
+        stats: overrides?.stats ?? stats,
+      };
+      saveGame(fullState);
+    },
+    [board, score, bestScore, gameWon, gameOver, hasContinued, previousBoard, previousScore, stats]
+  );
+
+  // 1. Initialize Playgama SDK Bridge and Load Cloud Save Data on startup
   useEffect(() => {
-    try {
-      const savedBest = localStorage.getItem(BEST_SCORE_KEY);
-      if (savedBest) {
-        const val = parseInt(savedBest, 10);
-        if (!isNaN(val)) setBestScore(val);
+    let isMounted = true;
+
+    async function initAndLoadStorage() {
+      // Step A: Initialize Playgama Bridge SDK
+      await initializeStorage();
+
+      // Step B: Load game progress from Playgama Storage
+      const savedData = await loadGame();
+
+      // Load Settings
+      try {
+        const savedSettings = localStorage.getItem(SETTINGS_KEY);
+        if (savedSettings) {
+          const parsed = JSON.parse(savedSettings);
+          setSettings(parsed);
+          sound.setSoundEnabled(parsed.sound);
+          sound.setVibrationEnabled(parsed.vibration);
+        }
+      } catch {
+        // Ignore settings fallback
       }
 
-      const savedStats = localStorage.getItem(STATS_KEY);
-      if (savedStats) {
-        setStats(JSON.parse(savedStats));
-      }
+      if (isMounted) {
+        if (savedData) {
+          // Restore game state from Playgama cloud save
+          setBoard(savedData.board);
+          setTiles(buildTilesFromBoardWithFlags(savedData.board, null, []));
+          setScore(savedData.score);
+          setBestScore(savedData.bestScore);
+          setGameWon(savedData.gameWon);
+          setGameOver(savedData.gameOver);
+          setHasContinued(savedData.hasContinued);
+          setPreviousBoard(savedData.previousBoard);
+          setPreviousScore(savedData.previousScore);
+          if (savedData.stats) {
+            setStats(savedData.stats);
+          }
+        } else {
+          // No save data found -> initialize fresh game
+          const { board: initialBoard, tiles: initialTiles } = newGameBoard();
+          setBoard(initialBoard);
+          setTiles(initialTiles);
+          setScore(0);
+          setPreviousBoard(null);
+          setPreviousScore(0);
+          setGameOver(false);
+          setGameWon(false);
+          setHasContinued(false);
 
-      const savedSettings = localStorage.getItem(SETTINGS_KEY);
-      if (savedSettings) {
-        const parsed = JSON.parse(savedSettings);
-        setSettings(parsed);
-        sound.setSoundEnabled(parsed.sound);
-        sound.setVibrationEnabled(parsed.vibration);
+          // Initial Save
+          saveGame({
+            board: initialBoard,
+            score: 0,
+            bestScore: 0,
+            gameWon: false,
+            gameOver: false,
+            hasContinued: false,
+            previousBoard: null,
+            previousScore: 0,
+            stats: {
+              bestScore: 0,
+              gamesPlayed: 1,
+              totalMerges: 0,
+              highestTile: 2,
+              wins: 0,
+            },
+          });
+        }
+
+        setIsLoading(false);
       }
-    } catch {
-      // LocalStorage fallback
     }
 
-    startNewGame();
+    initAndLoadStorage();
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
-
-  // Save best score and stats whenever updated
-  useEffect(() => {
-    try {
-      localStorage.setItem(BEST_SCORE_KEY, bestScore.toString());
-    } catch {
-      // Ignore
-    }
-  }, [bestScore]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(STATS_KEY, JSON.stringify(stats));
-    } catch {
-      // Ignore
-    }
-  }, [stats]);
 
   // Restart / New Game
   const startNewGame = useCallback(() => {
@@ -134,11 +197,24 @@ export default function App() {
     setShowConfirmRestart(false);
     setConfettiActive(false);
 
-    setStats((prev) => ({
-      ...prev,
-      gamesPlayed: prev.gamesPlayed + 1,
-    }));
-  }, []);
+    const updatedStats = {
+      ...stats,
+      gamesPlayed: stats.gamesPlayed + 1,
+    };
+    setStats(updatedStats);
+
+    // Save New Game State to Playgama Storage
+    persistState({
+      board: initialBoard,
+      score: 0,
+      previousBoard: null,
+      previousScore: 0,
+      gameOver: false,
+      gameWon: false,
+      hasContinued: false,
+      stats: updatedStats,
+    });
+  }, [stats, persistState]);
 
   const triggerMilestone = (tileVal: number) => {
     setMilestoneToast(`MILESTONE UNLOCKED: ${tileVal} TILE!`);
@@ -166,15 +242,16 @@ export default function App() {
       }
 
       // 1. Save Undo State before applying changes
-      setPreviousBoard(board.map((row) => [...row]));
-      setPreviousScore(score);
+      const newPrevBoard = board.map((row) => [...row]);
+      const newPrevScore = score;
+      setPreviousBoard(newPrevBoard);
+      setPreviousScore(newPrevScore);
 
       // 2. Add score from merges
       const newScore = score + moveResult.scoreGained;
+      const newBestScore = Math.max(bestScore, newScore);
       setScore(newScore);
-      if (newScore > bestScore) {
-        setBestScore(newScore);
-      }
+      setBestScore(newBestScore);
 
       // 3. Add exactly ONE new tile (90% chance of 2, 10% chance of 4)
       const { newBoard: finalBoard, addedTile } = addRandomTileToBoard(moveResult.board);
@@ -186,11 +263,12 @@ export default function App() {
       // 5. Update Statistics & Sound
       const highestTile = getHighestTileValue(finalBoard);
 
-      setStats((prev) => ({
-        ...prev,
-        bestScore: Math.max(prev.bestScore, newScore),
-        highestTile: Math.max(prev.highestTile, highestTile),
-      }));
+      const newStats: GameStats = {
+        ...stats,
+        bestScore: Math.max(stats.bestScore, newScore),
+        highestTile: Math.max(stats.highestTile, highestTile),
+      };
+      setStats(newStats);
 
       if (moveResult.scoreGained > 0) {
         sound.playMerge(highestTile);
@@ -205,31 +283,46 @@ export default function App() {
         }
       }
 
+      let newGameWon: boolean = gameWon;
+      let newGameOver: boolean = gameOver;
+
       // 6. Win Detection (2048 tile reached for first time)
       if (has2048Tile(finalBoard) && !gameWon) {
+        newGameWon = true;
         setGameWon(true);
         setShowWinModal(true);
         setConfettiActive(true);
         sound.playWin();
 
-        setStats((prev) => ({
-          ...prev,
-          wins: prev.wins + 1,
-        }));
+        newStats.wins = stats.wins + 1;
+        setStats(newStats);
       } else {
         // 7. Game Over Detection
         if (isGameOver(finalBoard)) {
+          newGameOver = true;
           setGameOver(true);
           sound.playGameOver();
         }
       }
+
+      // Save updated state to Playgama Cloud Storage after valid move
+      persistState({
+        board: finalBoard,
+        score: newScore,
+        bestScore: newBestScore,
+        gameWon: newGameWon,
+        gameOver: newGameOver,
+        previousBoard: newPrevBoard,
+        previousScore: newPrevScore,
+        stats: newStats,
+      });
 
       // Release animation lock after transition completes (150ms)
       setTimeout(() => {
         isMovingRef.current = false;
       }, 150);
     },
-    [board, score, bestScore, gameOver, gameWon, hasContinued, stats.highestTile]
+    [board, score, bestScore, gameOver, gameWon, hasContinued, stats, persistState]
   );
 
   // Request Undo (Opens confirmation popup or shows message if no move to undo)
@@ -249,14 +342,26 @@ export default function App() {
   const handleUndo = () => {
     if (!previousBoard) return;
 
-    setBoard(previousBoard);
-    setTiles(buildTilesFromBoardWithFlags(previousBoard, null, []));
-    setScore(previousScore);
+    const restoredBoard = previousBoard;
+    const restoredScore = previousScore;
+
+    setBoard(restoredBoard);
+    setTiles(buildTilesFromBoardWithFlags(restoredBoard, null, []));
+    setScore(restoredScore);
     setPreviousBoard(null);
     setPreviousScore(0);
     setGameOver(false);
     setShowWinModal(false);
     setShowConfirmUndo(false);
+
+    // Save restored undo state to Playgama Cloud Storage
+    persistState({
+      board: restoredBoard,
+      score: restoredScore,
+      previousBoard: null,
+      previousScore: 0,
+      gameOver: false,
+    });
   };
 
   // Continue Playing after reaching 2048
@@ -264,6 +369,10 @@ export default function App() {
     setHasContinued(true);
     setShowWinModal(false);
     setConfettiActive(false);
+
+    persistState({
+      hasContinued: true,
+    });
   };
 
   const handleUpdateSettings = (newSet: Partial<GameSettings>) => {
@@ -276,23 +385,18 @@ export default function App() {
     }
   };
 
-  const handleResetStats = () => {
-    setBestScore(0);
-    const reset = {
-      bestScore: 0,
-      gamesPlayed: 1,
-      totalMerges: 0,
-      highestTile: 2,
-      wins: 0,
-    };
-    setStats(reset);
-    try {
-      localStorage.removeItem(BEST_SCORE_KEY);
-      localStorage.setItem(STATS_KEY, JSON.stringify(reset));
-    } catch {
-      // Ignore
-    }
-  };
+  // Render Loading Screen while Playgama SDK initializes
+  if (isLoading) {
+    return (
+      <div className="min-h-screen w-full bg-[#faf8ef] text-[#776e65] flex flex-col items-center justify-center p-4 font-2048 select-none">
+        <div className="text-center">
+          <h1 className="text-4xl font-black text-[#776e65] mb-4 tracking-tight">MergeTiles</h1>
+          <div className="w-8 h-8 border-4 border-[#8f7a66] border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+          <p className="text-xs text-[#8f7a66] font-bold">Loading Cloud Storage...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen w-full bg-[#faf8ef] text-[#776e65] flex flex-col justify-between items-center py-4 px-2 sm:px-4 font-2048 relative overflow-hidden select-none">
