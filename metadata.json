@@ -1,0 +1,6 @@
+{
+  "name": "MergeTiles - Number Merge Game",
+  "description": "Play MergeTiles online. Join numbers, reach the 2048 tile, track high scores, and enjoy smooth swipe controls!",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

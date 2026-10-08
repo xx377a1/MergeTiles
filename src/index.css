@@ -1,0 +1,61 @@
+@import "tailwindcss";
+
+@layer utilities {
+  .font-2048 {
+    font-family: 'Plus Jakarta Sans', 'Outfit', system-ui, -apple-system, sans-serif;
+  }
+  .font-num {
+    font-family: 'Plus Jakarta Sans', sans-serif;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Classic 2048 Glows & Shadows */
+  .glow-2048 {
+    box-shadow: 0 0 30px rgba(237, 194, 46, 0.5), inset 0 0 10px rgba(255, 255, 255, 0.3);
+  }
+  .glow-board-classic {
+    box-shadow: 0 8px 24px rgba(119, 110, 101, 0.15);
+  }
+}
+
+@keyframes tilePop {
+  0% { transform: scale(0); opacity: 0; }
+  70% { transform: scale(1.12); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+@keyframes tileMerge {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.16); }
+  100% { transform: scale(1); }
+}
+
+@keyframes scoreFloat {
+  0% { transform: translateY(0) scale(1); opacity: 1; }
+  100% { transform: translateY(-30px) scale(1.15); opacity: 0; }
+}
+
+.animate-tile-pop {
+  animation: tilePop 0.16s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+}
+
+.animate-tile-merge {
+  animation: tileMerge 0.16s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+}
+
+.animate-score-float {
+  animation: scoreFloat 0.7s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Prevent text selection and unwanted touch behaviors on mobile */
+html, body {
+  background-color: #faf8ef;
+  color: #776e65;
+  touch-action: none;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+  overscroll-behavior: none;
+}
+
+
