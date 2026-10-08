@@ -1,4 +1,3 @@
-import bridge from '@playgama/bridge';
 import { GameStats } from '../types/game';
 
 export interface SavedGameState {
@@ -14,53 +13,40 @@ export interface SavedGameState {
   updatedAt: number;
 }
 
-const SAVE_KEY = 'mergetiles_playgama_save_v1';
-
-let isBridgeInitialized = false;
-let lastSavedTimestamp = 0;
+const SAVE_KEY = 'mergetiles_save_v1';
 
 /**
- * Initializes the official Playgama Bridge SDK
+ * Safely retrieves GamePix SDK instance if available
  */
-export async function initializeStorage(): Promise<boolean> {
-  try {
-    if (!bridge.isInitialized) {
-      await bridge.initialize();
-    }
-    isBridgeInitialized = true;
-    console.log('Playgama Bridge SDK initialized successfully.');
-    return true;
-  } catch (error) {
-    console.warn('Playgama Bridge SDK initialization unavailable, using local fallback:', error);
-    isBridgeInitialized = false;
-    return false;
+function getGamePixSDK() {
+  if (typeof window !== 'undefined' && (window as unknown as { GamePix?: any }).GamePix) {
+    return (window as unknown as { GamePix?: any }).GamePix;
   }
+  return null;
 }
 
 /**
- * Loads the saved game state using Playgama Storage API
+ * Loads and validates saved game state using GamePix.localStorage.getItem
  */
-export async function loadGame(): Promise<SavedGameState | null> {
-  try {
-    if (isBridgeInitialized) {
-      const data = await bridge.storage.get(SAVE_KEY, true);
-      if (data && typeof data === 'object') {
-        const parsed = data as Partial<SavedGameState>;
-        if (isValidSaveState(parsed)) {
-          return parsed as SavedGameState;
-        }
-      } else if (typeof data === 'string') {
-        const parsed = JSON.parse(data);
+export function loadGame(): SavedGameState | null {
+  const gpix = getGamePixSDK();
+
+  // Primary: Load from GamePix.localStorage
+  if (gpix && gpix.localStorage && typeof gpix.localStorage.getItem === 'function') {
+    try {
+      const rawData = gpix.localStorage.getItem(SAVE_KEY);
+      if (rawData) {
+        const parsed = JSON.parse(rawData);
         if (isValidSaveState(parsed)) {
           return parsed as SavedGameState;
         }
       }
+    } catch (err) {
+      console.warn('GamePix.localStorage getItem error:', err);
     }
-  } catch (err) {
-    console.warn('Playgama Storage load error:', err);
   }
 
-  // Fallback to localStorage if Playgama is uninitialized or fails
+  // Secondary Fallback: Load from browser localStorage
   try {
     const localData = localStorage.getItem(SAVE_KEY);
     if (localData) {
@@ -77,69 +63,111 @@ export async function loadGame(): Promise<SavedGameState | null> {
 }
 
 /**
- * Saves the current game state via Playgama Storage API with race condition protection
+ * Saves current game state using GamePix.localStorage.setItem and updates GamePix.updateScore
  */
-export async function saveGame(state: Omit<SavedGameState, 'updatedAt'>): Promise<boolean> {
-  const timestamp = Date.now();
-  if (timestamp < lastSavedTimestamp) {
-    // Prevent stale async state from overwriting newer state
-    return false;
-  }
-  lastSavedTimestamp = timestamp;
+export function saveGame(state: Omit<SavedGameState, 'updatedAt'>): boolean {
+  const gpix = getGamePixSDK();
 
   const fullSaveData: SavedGameState = {
     ...state,
-    updatedAt: timestamp,
+    updatedAt: Date.now(),
   };
 
-  // Local fallback save
+  const serialized = JSON.stringify(fullSaveData);
+
+  // 1. Update score on GamePix platform if method exists
+  if (gpix && typeof gpix.updateScore === 'function') {
+    try {
+      const validScore = Math.max(0, Math.floor(state.score || 0));
+      gpix.updateScore(validScore);
+    } catch (err) {
+      console.warn('GamePix.updateScore error:', err);
+    }
+  }
+
+  let savedSuccess = false;
+
+  // 2. Primary Save: GamePix.localStorage.setItem
+  if (gpix && gpix.localStorage && typeof gpix.localStorage.setItem === 'function') {
+    try {
+      gpix.localStorage.setItem(SAVE_KEY, serialized);
+      savedSuccess = true;
+    } catch (err) {
+      console.warn('GamePix.localStorage setItem error:', err);
+    }
+  }
+
+  // 3. Backup Save: Browser localStorage
   try {
-    localStorage.setItem(SAVE_KEY, JSON.stringify(fullSaveData));
+    localStorage.setItem(SAVE_KEY, serialized);
+    savedSuccess = true;
   } catch {
     // Ignore
   }
 
-  if (isBridgeInitialized) {
-    try {
-      await bridge.storage.set(SAVE_KEY, fullSaveData);
-      return true;
-    } catch (err) {
-      console.warn('Playgama Storage save error:', err);
-    }
-  }
-
-  return false;
+  return savedSuccess;
 }
 
 /**
- * Clears saved game data from Playgama Storage
+ * Clears saved game data from GamePix.localStorage
  */
-export async function clearSavedGame(): Promise<void> {
-  lastSavedTimestamp = Date.now();
+export function clearSavedGame(): void {
+  const gpix = getGamePixSDK();
+
+  if (gpix && gpix.localStorage && typeof gpix.localStorage.removeItem === 'function') {
+    try {
+      gpix.localStorage.removeItem(SAVE_KEY);
+    } catch (err) {
+      console.warn('GamePix.localStorage removeItem error:', err);
+    }
+  }
+
   try {
     localStorage.removeItem(SAVE_KEY);
   } catch {
     // Ignore
   }
-
-  if (isBridgeInitialized) {
-    try {
-      await bridge.storage.delete(SAVE_KEY);
-    } catch (err) {
-      console.warn('Playgama Storage delete error:', err);
-    }
-  }
 }
 
 /**
- * Validates the structure of loaded save state
+ * Validates save data integrity before restoring:
+ * - Board must be 4x4 matrix
+ * - Cell values must be non-negative integers
+ * - Score and bestScore must be non-negative numbers
+ * - Booleans must be valid
  */
 function isValidSaveState(data: any): boolean {
   if (!data || typeof data !== 'object') return false;
+
+  // Board 4x4 validation
   if (!Array.isArray(data.board) || data.board.length !== 4) return false;
   for (let r = 0; r < 4; r++) {
     if (!Array.isArray(data.board[r]) || data.board[r].length !== 4) return false;
+    for (let c = 0; c < 4; c++) {
+      const val = data.board[r][c];
+      if (typeof val !== 'number' || isNaN(val) || val < 0) return false;
+    }
   }
-  if (typeof data.score !== 'number' || typeof data.bestScore !== 'number') return false;
+
+  // Previous board validation (if present)
+  if (data.previousBoard !== null && data.previousBoard !== undefined) {
+    if (!Array.isArray(data.previousBoard) || data.previousBoard.length !== 4) return false;
+    for (let r = 0; r < 4; r++) {
+      if (!Array.isArray(data.previousBoard[r]) || data.previousBoard[r].length !== 4) return false;
+      for (let c = 0; c < 4; c++) {
+        const val = data.previousBoard[r][c];
+        if (typeof val !== 'number' || isNaN(val) || val < 0) return false;
+      }
+    }
+  }
+
+  // Scores validation
+  if (typeof data.score !== 'number' || isNaN(data.score) || data.score < 0) return false;
+  if (typeof data.bestScore !== 'number' || isNaN(data.bestScore) || data.bestScore < 0) return false;
+
+  // Booleans validation
+  if (typeof data.gameWon !== 'boolean') return false;
+  if (typeof data.gameOver !== 'boolean') return false;
+
   return true;
 }

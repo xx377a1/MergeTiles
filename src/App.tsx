@@ -10,7 +10,6 @@ import {
   getHighestTileValue,
 } from './utils/gameLogic';
 import {
-  initializeStorage,
   loadGame,
   saveGame,
   SavedGameState,
@@ -30,9 +29,6 @@ import { ConfettiCanvas } from './components/ConfettiCanvas';
 const SETTINGS_KEY = 'mergetiles_settings_v1';
 
 export default function App() {
-  // Loading State for Playgama Storage Initialization
-  const [isLoading, setIsLoading] = useState<boolean>(true);
-
   // Game State Engine Variables
   const [board, setBoard] = useState<number[][]>(() => [
     [0, 0, 0, 0],
@@ -81,7 +77,7 @@ export default function App() {
     showTouchPad: false,
   });
 
-  // Helper to persist current game state via Playgama Storage SDK
+  // Helper to persist current game state
   const persistState = useCallback(
     (overrides?: Partial<Omit<SavedGameState, 'updatedAt'>>) => {
       const fullState: Omit<SavedGameState, 'updatedAt'> = {
@@ -100,86 +96,69 @@ export default function App() {
     [board, score, bestScore, gameWon, gameOver, hasContinued, previousBoard, previousScore, stats]
   );
 
-  // 1. Initialize Playgama SDK Bridge and Load Cloud Save Data on startup
+  // Load saved game progress on startup
   useEffect(() => {
-    let isMounted = true;
+    // Step A: Load game progress
+    const savedData = loadGame();
 
-    async function initAndLoadStorage() {
-      // Step A: Initialize Playgama Bridge SDK
-      await initializeStorage();
-
-      // Step B: Load game progress from Playgama Storage
-      const savedData = await loadGame();
-
-      // Load Settings
-      try {
-        const savedSettings = localStorage.getItem(SETTINGS_KEY);
-        if (savedSettings) {
-          const parsed = JSON.parse(savedSettings);
-          setSettings(parsed);
-          sound.setSoundEnabled(parsed.sound);
-          sound.setVibrationEnabled(parsed.vibration);
-        }
-      } catch {
-        // Ignore settings fallback
+    // Load Settings
+    try {
+      const savedSettings = localStorage.getItem(SETTINGS_KEY);
+      if (savedSettings) {
+        const parsed = JSON.parse(savedSettings);
+        setSettings(parsed);
+        sound.setSoundEnabled(parsed.sound);
+        sound.setVibrationEnabled(parsed.vibration);
       }
-
-      if (isMounted) {
-        if (savedData) {
-          // Restore game state from Playgama cloud save
-          setBoard(savedData.board);
-          setTiles(buildTilesFromBoardWithFlags(savedData.board, null, []));
-          setScore(savedData.score);
-          setBestScore(savedData.bestScore);
-          setGameWon(savedData.gameWon);
-          setGameOver(savedData.gameOver);
-          setHasContinued(savedData.hasContinued);
-          setPreviousBoard(savedData.previousBoard);
-          setPreviousScore(savedData.previousScore);
-          if (savedData.stats) {
-            setStats(savedData.stats);
-          }
-        } else {
-          // No save data found -> initialize fresh game
-          const { board: initialBoard, tiles: initialTiles } = newGameBoard();
-          setBoard(initialBoard);
-          setTiles(initialTiles);
-          setScore(0);
-          setPreviousBoard(null);
-          setPreviousScore(0);
-          setGameOver(false);
-          setGameWon(false);
-          setHasContinued(false);
-
-          // Initial Save
-          saveGame({
-            board: initialBoard,
-            score: 0,
-            bestScore: 0,
-            gameWon: false,
-            gameOver: false,
-            hasContinued: false,
-            previousBoard: null,
-            previousScore: 0,
-            stats: {
-              bestScore: 0,
-              gamesPlayed: 1,
-              totalMerges: 0,
-              highestTile: 2,
-              wins: 0,
-            },
-          });
-        }
-
-        setIsLoading(false);
-      }
+    } catch {
+      // Ignore settings fallback
     }
 
-    initAndLoadStorage();
+    if (savedData) {
+      // Restore game state
+      setBoard(savedData.board);
+      setTiles(buildTilesFromBoardWithFlags(savedData.board, null, []));
+      setScore(savedData.score);
+      setBestScore(savedData.bestScore);
+      setGameWon(savedData.gameWon);
+      setGameOver(savedData.gameOver);
+      setHasContinued(savedData.hasContinued);
+      setPreviousBoard(savedData.previousBoard);
+      setPreviousScore(savedData.previousScore);
+      if (savedData.stats) {
+        setStats(savedData.stats);
+      }
+    } else {
+      // No save data found -> initialize fresh game
+      const { board: initialBoard, tiles: initialTiles } = newGameBoard();
+      setBoard(initialBoard);
+      setTiles(initialTiles);
+      setScore(0);
+      setPreviousBoard(null);
+      setPreviousScore(0);
+      setGameOver(false);
+      setGameWon(false);
+      setHasContinued(false);
 
-    return () => {
-      isMounted = false;
-    };
+      // Initial Save
+      saveGame({
+        board: initialBoard,
+        score: 0,
+        bestScore: 0,
+        gameWon: false,
+        gameOver: false,
+        hasContinued: false,
+        previousBoard: null,
+        previousScore: 0,
+        stats: {
+          bestScore: 0,
+          gamesPlayed: 1,
+          totalMerges: 0,
+          highestTile: 2,
+          wins: 0,
+        },
+      });
+    }
   }, []);
 
   // Restart / New Game
@@ -203,7 +182,7 @@ export default function App() {
     };
     setStats(updatedStats);
 
-    // Save New Game State to Playgama Storage
+    // Save New Game State
     persistState({
       board: initialBoard,
       score: 0,
@@ -305,7 +284,7 @@ export default function App() {
         }
       }
 
-      // Save updated state to Playgama Cloud Storage after valid move
+      // Save updated state after valid move
       persistState({
         board: finalBoard,
         score: newScore,
@@ -354,7 +333,7 @@ export default function App() {
     setShowWinModal(false);
     setShowConfirmUndo(false);
 
-    // Save restored undo state to Playgama Cloud Storage
+    // Save restored undo state
     persistState({
       board: restoredBoard,
       score: restoredScore,
@@ -384,19 +363,6 @@ export default function App() {
       // Ignore
     }
   };
-
-  // Render Loading Screen while Playgama SDK initializes
-  if (isLoading) {
-    return (
-      <div className="min-h-screen w-full bg-[#faf8ef] text-[#776e65] flex flex-col items-center justify-center p-4 font-2048 select-none">
-        <div className="text-center">
-          <h1 className="text-4xl font-black text-[#776e65] mb-4 tracking-tight">MergeTiles</h1>
-          <div className="w-8 h-8 border-4 border-[#8f7a66] border-t-transparent rounded-full animate-spin mx-auto mb-3" />
-          <p className="text-xs text-[#8f7a66] font-bold">Loading Cloud Storage...</p>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="min-h-screen w-full bg-[#faf8ef] text-[#776e65] flex flex-col justify-between items-center py-4 px-2 sm:px-4 font-2048 relative overflow-hidden select-none">
